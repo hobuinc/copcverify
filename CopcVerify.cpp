@@ -10,17 +10,15 @@
 #include <lazperf/vlr.hpp>
 
 #include "ProgramArgs.hpp"
-#include "Comparison.hpp"
 
-#pragma pack(push, 1)
 struct Las
 {
     int32_t x;
     int32_t y;
     int32_t z;
     uint16_t intensity;
-    uint8_t rn : 4;
-    uint8_t nr : 4;
+    uint8_t rn;
+    uint8_t nr;
     uint8_t class_flags : 4;
     uint8_t channel : 2;
     uint8_t scan_dir : 1;
@@ -34,6 +32,43 @@ struct Las
     uint16_t green;
     uint16_t blue;
     uint16_t nir;
+
+    Las(char *buf, int pdrf)
+    {
+        red = 0;
+        green = 0;
+        blue = 0;
+        nir = 0;
+        if (pdrf == 6 || pdrf == 7 || pdrf == 8)
+        {
+            memcpy(&x, buf, sizeof(x)); buf += sizeof(x);
+            memcpy(&y, buf, sizeof(y)); buf += sizeof(y);
+            memcpy(&z, buf, sizeof(y)); buf += sizeof(z);
+            memcpy(&intensity, buf, sizeof(intensity)); buf += sizeof(intensity);
+            uint8_t flags;
+            flags = *buf++;
+            rn = flags >> 4;
+            nr = flags & 0xF;
+            flags = *buf++;
+            class_flags = flags >> 4;
+            channel = (flags >> 2) & 0x3;
+            scan_dir = (flags >> 1) & 0x1;
+            eof = flags & 1;
+            classification = *buf++;
+            user_data = *buf++;
+            memcpy(&scan_angle, buf, sizeof(scan_angle)); buf += sizeof(scan_angle);
+            memcpy(&point_source_id, buf, sizeof(point_source_id)); buf += sizeof(point_source_id);
+            memcpy(&gpstime, buf, sizeof(gpstime)); buf += sizeof(gpstime);
+            if (pdrf == 7 || pdrf == 8)
+            {
+                memcpy(&red, buf, sizeof(red)); buf += sizeof(red);
+                memcpy(&green, buf, sizeof(green)); buf += sizeof(green);
+                memcpy(&blue, buf, sizeof(blue)); buf += sizeof(blue);
+                if (pdrf == 8)
+                    memcpy(&nir, buf, sizeof(nir)); buf += sizeof(nir);
+            }
+        }
+    }
 };
 
 template<typename T>
@@ -50,8 +85,6 @@ struct RangeCalc
     Range<double> z;
     Range<double> gpstime;
 };
-
-#pragma pack(pop)
 
 struct VoxelKey
 {
@@ -119,6 +152,8 @@ private:
     Entries processPage(Entries page);
     Entries getHierarchyPage(uint64_t offset, uint64_t size);
     int getChunkCount();
+    void dumpCopcVlr(const lazperf::copc_info_vlr& v);
+    void dumpHeader(const lazperf::header14& h);
 
     std::string m_filename;
     bool m_dump;
@@ -177,17 +212,8 @@ void Verifier::run()
 
     if (m_dump)
     {
-        std::cout << "Center X Y Z: " << copcVlr.center_x << " " << copcVlr.center_y <<
-            " " << copcVlr.center_z << "\n";
-        std::cout << "Root node halfsize: " << copcVlr.halfsize << "\n";
-        std::cout << "Root node point spacing: " << copcVlr.spacing << "\n";
-        std::cout << "GPS time min/max = " << copcVlr.gpstime_minimum << "/" <<
-            copcVlr.gpstime_maximum << "\n";
-        std::cout << "Total points (header): " << m_header.point_count << "\n";
-        std::cout << "Min X Y Z (header): " << m_header.minx << " " << m_header.miny << " " <<
-            m_header.minz << "\n";
-        std::cout << "Max X Y Z (header): " << m_header.maxx << " " << m_header.maxy << " " <<
-            m_header.maxz << "\n";
+        dumpCopcVlr(copcVlr);
+        dumpHeader(m_header);
     }
 
     if (m_header.version.major != 1 || m_header.version.minor != 4)
@@ -238,11 +264,12 @@ void Verifier::run()
             std::cout << "  " << p.first << ": " << p.second << "\n";
         }
         std::cout << "Total of all levels: " << sum << "\n";
+        std::cout << "\n";
     }
 
     verifyRanges(copcVlr);
 
-//    rawVerify();
+    rawVerify();
 }
 
 int Verifier::getChunkCount()
@@ -256,6 +283,9 @@ int Verifier::getChunkCount()
     m_in.read((char *)&chunkcount, sizeof(chunkcount));
     if (chunkcount > (std::numeric_limits<int>::max)())
         std::cout << "Chunk count in chunk table exceeds maximum expected.";
+
+lazperf::reader::named_file n(m_filename);
+
     return (int)chunkcount;
 }
 
@@ -268,62 +298,52 @@ void Verifier::rawVerify()
         std::cerr << "Invalid LAS header!\n";
 }
 
-/**
-void Verifier::checkEbVlr(const lazperf::copc_info_vlr& copcVlr)
-{
-    if (copcVlr.eb_vlr_offset == 0)
-        return;
-    uint64_t baseOffset = lazperf::header14::Size + lazperf::laz_vlr::Size + copcVlr.size();
-
-    if (copcVlr.eb_vlr_offset < baseOffset)
-        std::cerr << "Invalid COPC VLR. Offset to extra bytes VLR, " << copcVlr.eb_vlr_offset <<
-            ", is too small. Should be at least " << baseOffset << ".\n"; 
-    uint64_t offset = copcVlr.eb_vlr_offset - lazperf::vlr_header::Size;
-    m_in.seekg(offset);
-    lazperf::vlr_header vh = lazperf::vlr_header::create(m_in);
-    if (vh.user_id != "LASF_Spec")
-        std::cerr << "Invalid COPC VLR or extra bytes VLR. Found user ID of '" << vh.user_id <<
-            ". Expected 'LASF_Spec'.\n";
-    iv (vh.record_id != 4)
-        std::cerr << "Invalid COPC VLR or extra bytes VLR. Found record ID of '" << vh.record_id <<
-            "'. Expected '4'.\n";
-    lazperf::eb_vlr ebVlr = lazperf::eb_vlr::create(m_in);
-
-
-
-    if (vlr.eb_vlr_size & 192)
-        std::cerr 
-}
-**/
-
 uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCount)
 {
-    Entries allEntries;
+    Entries chunkEntries;
+    Entries nonzeroEntries;
 
     Entries page = getHierarchyPage(vlr.root_hier_offset, vlr.root_hier_size);
-    allEntries.insert(allEntries.end(), page.begin(), page.end());
-    verifyPage(page, allEntries);
+
+    // Add entries from the page to chunk entries if the point count is greater than zero.
+    // Chunks aren't created for empty voxels.
+    // Also keep track of chunk entries for all non-pointer chunks so that we can make
+    // sure that they're properly arranged.
+    std::copy_if(page.begin(), page.end(), std::back_inserter(chunkEntries),
+        [](const Entry& e){ return e.pointCount > 0; });
+    std::copy_if(page.begin(), page.end(), std::back_inserter(nonzeroEntries),
+        [](const Entry& e){ return e.pointCount >= 0; });
+
+    verifyPage(page, nonzeroEntries);
     Entries pageEntries = processPage(page);
     while (pageEntries.size())
     {
         Entry e = pageEntries.front();
         pageEntries.pop_front();
         Entries page = getHierarchyPage(e.offset, e.byteSize);
-        allEntries.insert(allEntries.end(), page.begin(), page.end());
-        verifyPage(page, allEntries);
+
+        std::copy_if(page.begin(), page.end(), std::back_inserter(chunkEntries),
+            [](const Entry& e){ return e.pointCount > 0; });
+        std::copy_if(page.begin(), page.end(), std::back_inserter(nonzeroEntries),
+            [](const Entry& e){ return e.pointCount >= 0; });
+
+        verifyPage(page, nonzeroEntries);
         Entries entries = processPage(page);
         pageEntries.insert(pageEntries.end(), entries.begin(), entries.end());
     }
 
-    if (allEntries.size() != chunkCount)
-        std::cerr << "Number of hierarchy VLR chunk entries doesn't match chunk table count.\n";
+    if (chunkEntries.size() != chunkCount)
+        std::cerr << "Number of hierarchy VLR chunk entries (" << chunkEntries.size() << ") " <<
+            "doesn't match chunk table count (" << chunkCount << ").\n";
 
     uint64_t totalPoints;
-    for (Entry e : allEntries)
+    for (Entry e : chunkEntries)
         totalPoints += e.pointCount;
     return totalPoints;
 }
 
+// Make sure that all the entries in a hierarchy page have parents in this page or one already
+// read.
 void Verifier::verifyPage(const Entries& page, const Entries& all)
 {
     auto keyExists = [&all](const VoxelKey& k)
@@ -388,12 +408,13 @@ void Verifier::readData(Entry entry)
     m_in.seekg(entry.offset);
     m_in.read(buf.data(), buf.size());
 
-    /**
     lazperf::reader::chunk_decompressor d(m_pdrf, m_ebCount, buf.data());
-    Las l;
+
+    char pointbuf[sizeof(Las)];
     while (entry.pointCount--)
     {
-        d.decompress(reinterpret_cast<char *>(&l));
+        d.decompress(pointbuf);
+        Las l(pointbuf, m_pdrf);
 
         double x = (l.x * m_header.scale.x) + m_header.offset.x;
         m_ext.x.high = (std::max)(x, m_ext.x.high);
@@ -410,7 +431,6 @@ void Verifier::readData(Entry entry)
         m_ext.gpstime.high = (std::max)(l.gpstime, m_ext.gpstime.high);
         m_ext.gpstime.low = (std::min)(l.gpstime, m_ext.gpstime.low);
     }
-    **/
 }
 
 void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
@@ -490,3 +510,76 @@ std::vector<char> Verifier::findVlr(const std::string& user_id, int record_id)
     }
     return buf;
 }
+
+void Verifier::dumpCopcVlr(const lazperf::copc_info_vlr& v)
+{
+    std::cout << "COPC VLR:\n";
+    std::cout << "\tCenter X Y Z: " << v.center_x << " " << v.center_y << " " << v.center_z << "\n";
+    std::cout << "\tRoot node halfsize: " << v.halfsize << "\n";
+    std::cout << "\tRoot node point spacing: " << v.spacing << "\n";
+    std::cout << "\tGPS time min/max = " << v.gpstime_minimum << "/" << v.gpstime_maximum << "\n";
+    std::cout << "\n";
+}
+
+void Verifier::dumpHeader(const lazperf::header14& h)
+{
+    std::cout << "LAS Header:\n";
+    std::cout << "\tFile source ID: " << h.file_source_id << "\n";
+    std::cout << "\tGlobal encoding: " << h.global_encoding << "\n";
+    std::cout << "\t\tTime representation: " <<
+        ((h.global_encoding & 0x01) ? "GPS Satellite Time" : "GPS Week Time") << "\n";
+    std::cout << "\t\tSRS Type: " <<
+        ((h.global_encoding & 0x10) ? "WKT" : "GeoTIFF") << "\n";
+    std::cout << "\tVersion: " << (int)h.version.major << "." << (int)h.version.minor << "\n";
+    std::cout << "\tSystem ID: " << h.system_identifier << "\n";
+    std::cout << "\tSoftware ID: " << h.generating_software << "\n";
+    std::cout << "\tCreation day/year: " << h.creation.day << " / " << h.creation.year << "\n";
+    std::cout << "\tHeader Size: " << h.header_size << "\n";
+    std::cout << "\tPoint Offset: " << h.point_offset << "\n";
+    std::cout << "\tVLR Count: " << h.vlr_count << "\n";
+    std::cout << "\tPoint Format: " << (h.point_format_id & 0xF) << "\n";
+    std::cout << "\tPoint Length: " << h.point_record_length << "\n";
+    std::cout << "\tNumber of Points old/1.4: " <<
+        h.point_count << " / " << h.point_count_14 << "\n";
+    std::cout << "\tScale X Y Z: " << h.scale.x << " " << h.scale.y << " " << h.scale.z << "\n";
+    std::cout << "\tOffset X Y Z: " << h.offset.x << " " << h.offset.y << " " << h.offset.z << "\n";
+    std::cout << "\tMin X Y Z: " << h.minx << " " << h.miny << " " << h.minz << "\n";
+    std::cout << "\tMax X Y Z: " << h.maxx << " " << h.maxy << " " << h.maxz << "\n";
+    std::cout << "\tPoint Counts by Return:     ";
+    for (int i = 0; i < 5; ++i)
+        std::cout << h.points_by_return[i] << " ";
+    std::cout << "\n";
+    std::cout << "\tExt Point Counts by Return: ";
+    for (int i = 0; i < 15; ++i)
+        std::cout << h.points_by_return_14[i] << " ";
+    std::cout << "\n\n";
+}
+
+/**
+void Verifier::checkEbVlr(const lazperf::copc_info_vlr& copcVlr)
+{
+    if (copcVlr.eb_vlr_offset == 0)
+        return;
+    uint64_t baseOffset = lazperf::header14::Size + lazperf::laz_vlr::Size + copcVlr.size();
+
+    if (copcVlr.eb_vlr_offset < baseOffset)
+        std::cerr << "Invalid COPC VLR. Offset to extra bytes VLR, " << copcVlr.eb_vlr_offset <<
+            ", is too small. Should be at least " << baseOffset << ".\n"; 
+    uint64_t offset = copcVlr.eb_vlr_offset - lazperf::vlr_header::Size;
+    m_in.seekg(offset);
+    lazperf::vlr_header vh = lazperf::vlr_header::create(m_in);
+    if (vh.user_id != "LASF_Spec")
+        std::cerr << "Invalid COPC VLR or extra bytes VLR. Found user ID of '" << vh.user_id <<
+            ". Expected 'LASF_Spec'.\n";
+    iv (vh.record_id != 4)
+        std::cerr << "Invalid COPC VLR or extra bytes VLR. Found record ID of '" << vh.record_id <<
+            "'. Expected '4'.\n";
+    lazperf::eb_vlr ebVlr = lazperf::eb_vlr::create(m_in);
+
+
+
+    if (vlr.eb_vlr_size & 192)
+        std::cerr 
+}
+**/
+
