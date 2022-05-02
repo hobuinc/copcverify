@@ -104,7 +104,7 @@ struct VoxelKey
         return VoxelKey {depth - 1, x >> 1, y >> 1, z >> 1};
     }
 
-    bool operator == (const VoxelKey& other) const
+    bool operator==(const VoxelKey& other) const
     {
         return depth == other.depth && x == other.x && y == other.y && z == other.z;
     }
@@ -133,12 +133,13 @@ public:
         return e;
     }
 };
+
 using Entries = std::deque<Entry>;
 
 class Verifier
 {
 public:
-    Verifier(const std::string& filename, bool dump);
+    Verifier(const std::string& filename, bool dump, bool dumpChunks);
 
     void run();
     void rawVerify();
@@ -157,6 +158,7 @@ private:
 
     std::string m_filename;
     bool m_dump;
+    bool m_dumpChunks;
     std::ifstream m_in;
     int m_ebCount = 0;
     int m_pdrf = 0;
@@ -165,6 +167,7 @@ private:
     RangeCalc m_ext;
     uint64_t m_fileSize;
     std::map<int, uint64_t> m_totals;
+    std::map<int, uint64_t> m_counts;
 };
 
 int main(int argc, char *argv[])
@@ -173,10 +176,12 @@ int main(int argc, char *argv[])
 
     std::string filename;
     bool dump;
+    bool dumpChunks;
 
     ProgramArgs args;
     args.add("filename", "Filename", filename).setPositional();
     args.add("dump,d", "Dump notable information", dump);
+    args.add("chunks,c", "Dump chunk information", dumpChunks);
 
     std::vector<std::string> input;
     for (int i = 1; i < argc; ++i)
@@ -192,11 +197,12 @@ int main(int argc, char *argv[])
         std::cerr << "Usage: copcverify <filename>\n";
         return -1;
     }
-    Verifier v(filename, dump);
+    Verifier v(filename, dump, dumpChunks);
     v.run();
 }
 
-Verifier::Verifier(const std::string& filename, bool dump) : m_filename(filename), m_dump(dump)
+Verifier::Verifier(const std::string& filename, bool dump, bool dumpChunks) :
+    m_filename(filename), m_dump(dump), m_dumpChunks(dumpChunks)
 {
     m_in.open(m_filename.data(), std::ios::binary | std::ios::in);
     m_in.seekg(0, std::ios::end);
@@ -261,7 +267,8 @@ void Verifier::run()
         for (auto& p : m_totals)
         {
             sum += p.second;
-            std::cout << "  " << p.first << ": " << p.second << "\n";
+            std::cout << "  " << p.first << ": " << p.second <<
+                " (" << (p.second / m_counts[p.first]) << ")\n";
         }
         std::cout << "Total of all levels: " << sum << "\n";
         std::cout << "\n";
@@ -301,7 +308,7 @@ void Verifier::rawVerify()
 uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCount)
 {
     Entries chunkEntries;
-    Entries nonzeroEntries;
+    Entries nonnegEntries;
 
     Entries page = getHierarchyPage(vlr.root_hier_offset, vlr.root_hier_size);
 
@@ -311,10 +318,10 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
     // sure that they're properly arranged.
     std::copy_if(page.begin(), page.end(), std::back_inserter(chunkEntries),
         [](const Entry& e){ return e.pointCount > 0; });
-    std::copy_if(page.begin(), page.end(), std::back_inserter(nonzeroEntries),
+    std::copy_if(page.begin(), page.end(), std::back_inserter(nonnegEntries),
         [](const Entry& e){ return e.pointCount >= 0; });
 
-    verifyPage(page, nonzeroEntries);
+    verifyPage(page, nonnegEntries);
     Entries pageEntries = processPage(page);
     while (pageEntries.size())
     {
@@ -324,10 +331,10 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
 
         std::copy_if(page.begin(), page.end(), std::back_inserter(chunkEntries),
             [](const Entry& e){ return e.pointCount > 0; });
-        std::copy_if(page.begin(), page.end(), std::back_inserter(nonzeroEntries),
+        std::copy_if(page.begin(), page.end(), std::back_inserter(nonnegEntries),
             [](const Entry& e){ return e.pointCount >= 0; });
 
-        verifyPage(page, nonzeroEntries);
+        verifyPage(page, nonnegEntries);
         Entries entries = processPage(page);
         pageEntries.insert(pageEntries.end(), entries.begin(), entries.end());
     }
@@ -335,6 +342,23 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
     if (chunkEntries.size() != chunkCount)
         std::cerr << "Number of hierarchy VLR chunk entries (" << chunkEntries.size() << ") " <<
             "doesn't match chunk table count (" << chunkCount << ").\n";
+
+    if (m_dumpChunks)
+    {
+        std::sort(nonnegEntries.begin(), nonnegEntries.end(),
+            [](const Entry& e1, const Entry& e2) { return e1.offset < e2.offset; });
+
+        uint64_t total = 0;
+        std::cout << "Chunks:\n";
+        std::cout << "\tKey:     Offest / Count / Total Count\n";
+        for (const Entry& e : nonnegEntries)
+        {
+            total += e.pointCount;
+            std::cout << "\t" << std::string(e.key) << ": " <<
+                e.offset << " / " << e.pointCount << " / " << total << "\n";
+        }
+        std::cout << "\n";
+    }
 
     uint64_t totalPoints;
     for (Entry e : chunkEntries)
@@ -395,6 +419,7 @@ Entries Verifier::processPage(Entries page)
         else
         {
             m_totals[entry.key.depth] += entry.pointCount;
+            m_counts[entry.key.depth]++;
             readData(entry);
         }
     }
@@ -537,14 +562,18 @@ void Verifier::dumpHeader(const lazperf::header14& h)
     std::cout << "\tHeader Size: " << h.header_size << "\n";
     std::cout << "\tPoint Offset: " << h.point_offset << "\n";
     std::cout << "\tVLR Count: " << h.vlr_count << "\n";
+    std::cout << "\tEVLR Count: " << h.evlr_count << "\n";
+    std::cout << "\tEVLR Offset: " << h.evlr_offset << "\n";
     std::cout << "\tPoint Format: " << (h.point_format_id & 0xF) << "\n";
     std::cout << "\tPoint Length: " << h.point_record_length << "\n";
     std::cout << "\tNumber of Points old/1.4: " <<
         h.point_count << " / " << h.point_count_14 << "\n";
+    std::cout << std::fixed;
     std::cout << "\tScale X Y Z: " << h.scale.x << " " << h.scale.y << " " << h.scale.z << "\n";
     std::cout << "\tOffset X Y Z: " << h.offset.x << " " << h.offset.y << " " << h.offset.z << "\n";
     std::cout << "\tMin X Y Z: " << h.minx << " " << h.miny << " " << h.minz << "\n";
     std::cout << "\tMax X Y Z: " << h.maxx << " " << h.maxy << " " << h.maxz << "\n";
+    std::cout << std::defaultfloat;
     std::cout << "\tPoint Counts by Return:     ";
     for (int i = 0; i < 5; ++i)
         std::cout << h.points_by_return[i] << " ";
@@ -576,10 +605,8 @@ void Verifier::checkEbVlr(const lazperf::copc_info_vlr& copcVlr)
             "'. Expected '4'.\n";
     lazperf::eb_vlr ebVlr = lazperf::eb_vlr::create(m_in);
 
-
-
     if (vlr.eb_vlr_size & 192)
-        std::cerr 
+        ...
 }
 **/
 

@@ -207,11 +207,15 @@ void basic_file::Private::parseVLRs()
             f->seekg(h.data_length, std::ios::cur); // jump forward
         count++;
     }
+    if (!f->good())
+        std::cerr << "Couldn't load VLRs!\n";
 
     // Search EVLRs
     if (head14.evlr_count && head14.evlr_offset != 0)
     {
         f->seekg(head14.evlr_offset);
+        if (!f->good())
+            std::cerr << "Invalid EVLR offset (" << head14.evlr_offset << ").\n";
 
         size_t count = 0;
         while (count < head14.evlr_count && f->good() && !f->eof())
@@ -225,6 +229,8 @@ void basic_file::Private::parseVLRs()
             count++;
         }
     }
+    if (!f->good())
+        std::cerr << "Couldn't load EXT VLRs!\n";
 
     if (compressed && !laz.valid())
         throw error("Couldn't find LASZIP VLR");
@@ -276,6 +282,8 @@ void basic_file::Private::parseChunkTable()
 {
     // Move to the begining of the data
     f->seekg(head12.point_offset);
+    if (!f->good())
+        throw error("Couldn't seek.");
 
     int64_t chunkoffset = 0;
     f->read((char*)&chunkoffset, sizeof(chunkoffset));
