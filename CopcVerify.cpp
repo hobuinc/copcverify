@@ -3,6 +3,7 @@
 #include <deque>
 #include <cstring>
 #include <cmath>
+#include <sstream>
 
 #include <lazperf/Extractor.hpp>
 #include <lazperf/header.hpp>
@@ -134,6 +135,12 @@ public:
     }
 };
 
+std::ostream& operator << (std::ostream& out, const VoxelKey& k)
+{
+    out << k.depth << "-" << k.x << "-" << k.y << "-" << k.z;
+    return out;
+}
+
 using Entries = std::deque<Entry>;
 
 class Verifier
@@ -143,14 +150,15 @@ public:
 
     void run();
     void rawVerify();
+    void dumpErrors() const;
 private:
     void checkEbVlr(const lazperf::copc_info_vlr& vlr);
     uint64_t traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCount);
     std::vector<char> findVlr(const std::string& user_id, int record_id);
     void verifyRanges(const lazperf::copc_info_vlr& vlr);
     void verifyPage(const Entries& page, const Entries& all);
-    void readData(Entry entry);
-    Entries processPage(Entries page);
+    void readData(Entry entry, const RangeCalc& extent);
+    Entries processPage(Entries page, const lazperf::copc_info_vlr& vlr);
     Entries getHierarchyPage(uint64_t offset, uint64_t size);
     int getChunkCount();
     void dumpCopcVlr(const lazperf::copc_info_vlr& v);
@@ -168,6 +176,7 @@ private:
     uint64_t m_fileSize;
     std::map<int, uint64_t> m_totals;
     std::map<int, uint64_t> m_counts;
+    std::vector<std::string> m_errors;
 };
 
 int main(int argc, char *argv[])
@@ -199,6 +208,7 @@ int main(int argc, char *argv[])
     }
     Verifier v(filename, dump, dumpChunks);
     v.run();
+    v.dumpErrors();
 }
 
 Verifier::Verifier(const std::string& filename, bool dump, bool dumpChunks) :
@@ -223,29 +233,57 @@ void Verifier::run()
     }
 
     if (m_header.version.major != 1 || m_header.version.minor != 4)
-        std::cerr << "Invalid COPC file. Found version " <<
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC file. Found version " <<
             (int)m_header.version.major << "." << (int)m_header.version.minor <<
             " instead of 1.4\n.";
+        m_errors.push_back(oss.str());
+    }
     if (m_header.header_size != lazperf::header14::Size)
-        std::cerr << "Invalid COPC file. Found header size of " << m_header.header_size <<
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC file. Found header size of " << m_header.header_size <<
             " instead of " << lazperf::header14::Size << ".\n";
+        m_errors.push_back(oss.str());
+    }
     if ((m_header.point_format_id & 0x80) == 0)
-        std::cerr << "Invalid COPC file. Compression bit (high bit) of point format ID "
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC file. Compression bit (high bit) of point format ID "
             "not set.\n";
+        m_errors.push_back(oss.str());
+    }
     int pdrf = m_header.point_format_id & 0x7F;
     if (pdrf < 6 || pdrf > 8)
-        std::cerr << "Invalid COPC file. Point format is " << pdrf << ". Should be 6, 7, or 8.";
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC file. Point format is " << pdrf << ". Should be 6, 7, or 8.";
+        m_errors.push_back(oss.str());
+    }
 
     if (vh.user_id != "copc")
-        std::cerr << "Invalid COPC VLR header. User ID is '" << vh.user_id <<
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC VLR header. User ID is '" << vh.user_id <<
             "', not 'copc'.\n";
+        m_errors.push_back(oss.str());
+    }
     if (vh.record_id != 1)
-        std::cerr << "Invalid COPC VLR header. Record ID is " << (int)vh.record_id << ", not 1.\n";
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC VLR header. Record ID is " << (int)vh.record_id << ", not 1.\n";
+        m_errors.push_back(oss.str());
+    }
 
     for (int i = 0; i < 11; ++i)
         if (copcVlr.reserved[i])
-            std::cerr << "Invalid COPC VLR. COPC field reserved[" << i << "] is " <<
+        {
+            std::ostringstream oss;
+            oss << "Invalid COPC VLR. COPC field reserved[" << i << "] is " <<
                 copcVlr.reserved[i] << ", not 0.\n";
+            m_errors.push_back(oss.str());
+        }
 
     int baseCount = lazperf::baseCount(m_header.point_format_id);
     if (baseCount == 0)
@@ -279,6 +317,12 @@ void Verifier::run()
     rawVerify();
 }
 
+void Verifier::dumpErrors() const
+{
+    for (const std::string& s : m_errors)
+        std::cerr << s << "\n";
+}
+
 int Verifier::getChunkCount()
 {
     uint64_t chunkoffset;
@@ -302,7 +346,7 @@ void Verifier::rawVerify()
     m_in.seekg(0);
     m_in.read(buf.data(), 375);
     if (buf[0] != 'L' || buf[1] != 'A' || buf[2] != 'S' || buf[3] != 'F')
-        std::cerr << "Invalid LAS header!\n";
+        m_errors.push_back("Invalid LAS header.");
 }
 
 uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCount)
@@ -322,7 +366,7 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
         [](const Entry& e){ return e.pointCount >= 0; });
 
     verifyPage(page, nonnegEntries);
-    Entries pageEntries = processPage(page);
+    Entries pageEntries = processPage(page, vlr);
     while (pageEntries.size())
     {
         Entry e = pageEntries.front();
@@ -335,13 +379,17 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
             [](const Entry& e){ return e.pointCount >= 0; });
 
         verifyPage(page, nonnegEntries);
-        Entries entries = processPage(page);
+        Entries entries = processPage(page, vlr);
         pageEntries.insert(pageEntries.end(), entries.begin(), entries.end());
     }
 
     if (chunkEntries.size() != chunkCount)
-        std::cerr << "Number of hierarchy VLR chunk entries (" << chunkEntries.size() << ") " <<
-            "doesn't match chunk table count (" << chunkCount << ").\n";
+    {
+        std::ostringstream oss;
+        oss << "Number of hierarchy VLR chunk entries (" << chunkEntries.size() << ") " <<
+            "doesn't match chunk table count (" << chunkCount << ").";
+        m_errors.push_back(oss.str());
+    }
 
     if (m_dumpChunks)
     {
@@ -384,8 +432,12 @@ void Verifier::verifyPage(const Entries& page, const Entries& all)
         if (parent.depth < 0)
             continue;
         if (!keyExists(parent))
-            std::cerr << "Hierarchy entry " << std::string(e.key) << " has no parent in "
-                "existing hierarchy.\n";
+        {
+            std::ostringstream oss;
+            oss << "Hierarchy entry " << std::string(e.key) << " has no parent in "
+                "existing hierarchy.";
+            m_errors.push_back(oss.str());
+        }
     }
 }
 
@@ -395,39 +447,64 @@ Entries Verifier::getHierarchyPage(uint64_t offset, uint64_t size)
     Entries page;
     int numEntries = size / Entry::Size;
     if (numEntries * Entry::Size != size)
-        std::cerr << "Error in hierarchy page size. Not divisible by entry size.";
+        m_errors.push_back("Error in hierarchy page size. Not divisible by entry size.");
     m_in.seekg(offset);
     while (numEntries--)
     {
         page.push_back(Entry::create(m_in));
         Entry& e = page.back();
         if (e.offset + e.byteSize > m_fileSize)
-            std::cerr << "Invalid entry - offset(" << e.offset << ") + byteSize(" <<
+        {
+            std::ostringstream oss;
+            oss << "Invalid entry - offset(" << e.offset << ") + byteSize(" <<
                 e.byteSize << ") is greater than file size(" << m_fileSize << ").\n";
+            m_errors.push_back(oss.str());
+        }
     }
     return page;
 }
 
 // Process the page and return any child pages.
-Entries Verifier::processPage(Entries page)
+Entries Verifier::processPage(Entries page, const lazperf::copc_info_vlr& vlr)
 {
+    RangeCalc fullExtent;
+    fullExtent.x.low = vlr.center_x - vlr.halfsize;
+    fullExtent.x.high = vlr.center_x + vlr.halfsize;
+    fullExtent.y.low = vlr.center_y - vlr.halfsize;
+    fullExtent.y.high = vlr.center_y + vlr.halfsize;
+    fullExtent.z.low = vlr.center_z - vlr.halfsize;
+    fullExtent.z.high = vlr.center_z + vlr.halfsize;
+
     Entries children;
     for (Entry entry : page)
     {
+        int cells = (int)std::pow(2, entry.key.depth);
+        double xwidth = (fullExtent.x.high - fullExtent.x.low) / cells;
+        double ywidth = (fullExtent.y.high - fullExtent.y.low) / cells;
+        double zwidth = (fullExtent.z.high - fullExtent.z.low) / cells;
+
+        RangeCalc extent;
+        extent.x.low = fullExtent.x.low + (entry.key.x * xwidth);
+        extent.x.high = extent.x.low + xwidth;
+        extent.y.low = fullExtent.y.low + (entry.key.y * xwidth);
+        extent.y.high = extent.y.low + xwidth;
+        extent.z.low = fullExtent.z.low + (entry.key.z * xwidth);
+        extent.z.high = extent.z.low + xwidth;
+
         if (entry.isChildRef())
             children.push_back(entry);
         else
         {
             m_totals[entry.key.depth] += entry.pointCount;
             m_counts[entry.key.depth]++;
-            readData(entry);
+            readData(entry, extent);
         }
     }
     return children;
 }
 
 // Read the data to make sure it decompresses.
-void Verifier::readData(Entry entry)
+void Verifier::readData(Entry entry, const RangeCalc& r)
 {
     std::vector<char> buf(entry.byteSize);
     m_in.seekg(entry.offset);
@@ -435,6 +512,7 @@ void Verifier::readData(Entry entry)
 
     lazperf::reader::chunk_decompressor d(m_pdrf, m_ebCount, buf.data());
 
+    bool outOfRange = false;
     char pointbuf[sizeof(Las)];
     while (entry.pointCount--)
     {
@@ -455,6 +533,15 @@ void Verifier::readData(Entry entry)
 
         m_ext.gpstime.high = (std::max)(l.gpstime, m_ext.gpstime.high);
         m_ext.gpstime.low = (std::min)(l.gpstime, m_ext.gpstime.low);
+
+        outOfRange |= (x < r.x.low) || (x > r.x.high) || (y < r.y.low) ||
+            (y > r.y.high) || (z < r.z.low) || (z > r.z.high);
+    }
+    if (outOfRange)
+    {
+        std::ostringstream oss;
+        oss << "Node " << entry.key << " contains out of range points.\n";
+        m_errors.push_back(oss.str());
     }
 }
 
@@ -467,35 +554,67 @@ void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
         return fabs(a - b) <= ( (fabs(a) < fabs(b) ? fabs(b) : fabs(a)) * epsilon);
     };
 
-    std::cerr << std::setprecision(17);
+    std::ostringstream oss;
+    oss << std::setprecision(17);
     if (!closeEnough(m_ext.x.low, m_header.minx, .0000001))
-        std::cerr << "Minimum X value of " << m_ext.x.low << " doesn't match header minimum of " <<
+    {
+        oss << "Minimum X value of " << m_ext.x.low << " doesn't match header minimum of " <<
             m_header.minx << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
     if (!closeEnough(m_ext.x.high, m_header.maxx, .0000001))
-        std::cerr << "Maximum X value of " << m_ext.x.high << " doesn't match header maximum of " <<
+    {
+        oss << "Maximum X value of " << m_ext.x.high << " doesn't match header maximum of " <<
             m_header.maxx << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
 
     if (!closeEnough(m_ext.y.low, m_header.miny, .0000001))
-        std::cerr << "Minimum Y value of " << m_ext.y.low << " doesn't match header minimum of " <<
+    {
+        oss << "Minimum Y value of " << m_ext.y.low << " doesn't match header minimum of " <<
             m_header.miny << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
     if (!closeEnough(m_ext.y.high, m_header.maxy, .0000001))
-        std::cerr << "Maximum Y value of " << m_ext.y.high << " doesn't match header maximum of " <<
+    {
+        oss << "Maximum Y value of " << m_ext.y.high << " doesn't match header maximum of " <<
             m_header.maxy << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
 
     if (!closeEnough(m_ext.z.low, m_header.minz, .0000001))
-        std::cerr << "Minimum Z value of " << m_ext.z.low << " doesn't match header minimum of " <<
+    {
+        oss << "Minimum Z value of " << m_ext.z.low << " doesn't match header minimum of " <<
             m_header.minz << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
     if (!closeEnough(m_ext.z.high, m_header.maxz, .0000001))
-        std::cerr << "Maximum Z value of " << m_ext.z.high << " doesn't match header maximum of " <<
+    {
+        oss << "Maximum Z value of " << m_ext.z.high << " doesn't match header maximum of " <<
             m_header.maxz << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
 
     if (!closeEnough(m_ext.gpstime.low, copcVlr.gpstime_minimum, .0000001))
-        std::cerr << "Minimum GPS time value of " << m_ext.gpstime.low <<
+    {
+        oss << "Minimum GPS time value of " << m_ext.gpstime.low <<
             " doesn't match COPC VLR minimum of " << copcVlr.gpstime_minimum << ".\n";
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
     if (!closeEnough(m_ext.gpstime.high, copcVlr.gpstime_maximum, .0000001))
-        std::cerr << "Maximum GPS time value of " << m_ext.gpstime.high <<
+    {
+        oss << "Maximum GPS time value of " << m_ext.gpstime.high <<
             " doesn't match COPC VLR maximum of " << copcVlr.gpstime_maximum << ".\n";
-    std::cerr << std::setprecision(6);
+        m_errors.push_back(oss.str());
+        oss.str("");
+    }
 }
 
 std::vector<char> Verifier::findVlr(const std::string& user_id, int record_id)
@@ -504,7 +623,7 @@ std::vector<char> Verifier::findVlr(const std::string& user_id, int record_id)
 
     m_in.seekg(m_header.header_size);
     int count = 0;
-    while (count < m_header.vlr_count && m_in.good() && !m_in.eof())    
+    while (count < m_header.vlr_count && m_in.good() && !m_in.eof())
     {
         lazperf::vlr_header h = lazperf::vlr_header::create(m_in);
         if (h.user_id == user_id && h.record_id == record_id)
@@ -521,7 +640,7 @@ std::vector<char> Verifier::findVlr(const std::string& user_id, int record_id)
 
     m_in.seekg(m_header.evlr_offset);
     count = 0;
-    while (count < m_header.evlr_count && m_in.good() && !m_in.eof())    
+    while (count < m_header.evlr_count && m_in.good() && !m_in.eof())
     {
         lazperf::evlr_header h = lazperf::evlr_header::create(m_in);
         if (h.user_id == user_id && h.record_id == record_id)
@@ -592,15 +711,23 @@ void Verifier::checkEbVlr(const lazperf::copc_info_vlr& copcVlr)
     uint64_t baseOffset = lazperf::header14::Size + lazperf::laz_vlr::Size + copcVlr.size();
 
     if (copcVlr.eb_vlr_offset < baseOffset)
-        std::cerr << "Invalid COPC VLR. Offset to extra bytes VLR, " << copcVlr.eb_vlr_offset <<
-            ", is too small. Should be at least " << baseOffset << ".\n"; 
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC VLR. Offset to extra bytes VLR, " << copcVlr.eb_vlr_offset <<
+            ", is too small. Should be at least " << baseOffset << ".\n";
+        m_errors.push_back(oss.str());
+    }
     uint64_t offset = copcVlr.eb_vlr_offset - lazperf::vlr_header::Size;
     m_in.seekg(offset);
     lazperf::vlr_header vh = lazperf::vlr_header::create(m_in);
     if (vh.user_id != "LASF_Spec")
-        std::cerr << "Invalid COPC VLR or extra bytes VLR. Found user ID of '" << vh.user_id <<
+    {
+        std::ostringstream oss;
+        oss << "Invalid COPC VLR or extra bytes VLR. Found user ID of '" << vh.user_id <<
             ". Expected 'LASF_Spec'.\n";
-    iv (vh.record_id != 4)
+        m_errors.push_back(oss.str());
+    }
+    if (vh.record_id != 4)
         std::cerr << "Invalid COPC VLR or extra bytes VLR. Found record ID of '" << vh.record_id <<
             "'. Expected '4'.\n";
     lazperf::eb_vlr ebVlr = lazperf::eb_vlr::create(m_in);
