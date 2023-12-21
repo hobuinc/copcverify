@@ -149,7 +149,6 @@ public:
     Verifier(const std::string& filename, bool dump, bool dumpChunks);
 
     void run();
-    void rawVerify();
     void dumpErrors() const;
 private:
     void checkEbVlr(const lazperf::copc_info_vlr& vlr);
@@ -223,28 +222,29 @@ Verifier::Verifier(const std::string& filename, bool dump, bool dumpChunks) :
 void Verifier::run()
 {
     m_header = lazperf::header14::create(m_in);
-    lazperf::vlr_header vh = lazperf::vlr_header::create(m_in);
-    lazperf::copc_info_vlr copcVlr = lazperf::copc_info_vlr::create(m_in);
+    if (!m_in)
+        m_errors.push_back("Stream error reading LAS header. File invalid");
 
     if (m_dump)
-    {
-        dumpCopcVlr(copcVlr);
         dumpHeader(m_header);
-    }
+
+    std::string magic(m_header.magic, 4);
+    if (magic != "LASF")
+        m_errors.push_back("Invalid LAS magic number. Should be 'LASF'. Found '" + magic + "'.");
 
     if (m_header.version.major != 1 || m_header.version.minor != 4)
     {
         std::ostringstream oss;
         oss << "Invalid COPC file. Found version " <<
             (int)m_header.version.major << "." << (int)m_header.version.minor <<
-            " instead of 1.4\n.";
+            " instead of 1.4.";
         m_errors.push_back(oss.str());
     }
     if (m_header.header_size != lazperf::header14::Size)
     {
         std::ostringstream oss;
         oss << "Invalid COPC file. Found header size of " << m_header.header_size <<
-            " instead of " << lazperf::header14::Size << ".\n";
+            " instead of " << lazperf::header14::Size << ".";
         m_errors.push_back(oss.str());
     }
     if ((m_header.point_format_id & 0x80) == 0)
@@ -262,17 +262,22 @@ void Verifier::run()
         m_errors.push_back(oss.str());
     }
 
+    lazperf::vlr_header vh = lazperf::vlr_header::create(m_in);
+    lazperf::copc_info_vlr copcVlr = lazperf::copc_info_vlr::create(m_in);
+    if (m_dump)
+        dumpCopcVlr(copcVlr);
+
     if (vh.user_id != "copc")
     {
         std::ostringstream oss;
         oss << "Invalid COPC VLR header. User ID is '" << vh.user_id <<
-            "', not 'copc'.\n";
+            "', not 'copc'.";
         m_errors.push_back(oss.str());
     }
     if (vh.record_id != 1)
     {
         std::ostringstream oss;
-        oss << "Invalid COPC VLR header. Record ID is " << (int)vh.record_id << ", not 1.\n";
+        oss << "Invalid COPC VLR header. Record ID is " << (int)vh.record_id << ", not 1.";
         m_errors.push_back(oss.str());
     }
 
@@ -281,7 +286,7 @@ void Verifier::run()
         {
             std::ostringstream oss;
             oss << "Invalid COPC VLR. COPC field reserved[" << i << "] is " <<
-                copcVlr.reserved[i] << ", not 0.\n";
+                copcVlr.reserved[i] << ", not 0.";
             m_errors.push_back(oss.str());
         }
 
@@ -297,7 +302,8 @@ void Verifier::run()
     checkEbVlr(copcVlr);
     **/
 
-    uint64_t readPoints = traverseTree(copcVlr, chunkCount);
+    if (m_errors.empty())
+        traverseTree(copcVlr, chunkCount);
     if (m_dump)
     {
         std::cout << "Points per level:\n";
@@ -311,14 +317,16 @@ void Verifier::run()
         std::cout << "Total of all levels: " << sum << "\n";
         std::cout << "\n";
     }
-
     verifyRanges(copcVlr);
-
-    rawVerify();
 }
 
 void Verifier::dumpErrors() const
 {
+    if (m_errors.size())
+    {
+        std::cerr << "ERRORS:\n";
+        std::cerr << "=======\n";
+    }
     for (const std::string& s : m_errors)
         std::cerr << s << "\n";
 }
@@ -335,18 +343,7 @@ int Verifier::getChunkCount()
     if (chunkcount > (std::numeric_limits<int>::max)())
         std::cout << "Chunk count in chunk table exceeds maximum expected.";
 
-lazperf::reader::named_file n(m_filename);
-
     return (int)chunkcount;
-}
-
-void Verifier::rawVerify()
-{
-    std::vector<char> buf(10000);
-    m_in.seekg(0);
-    m_in.read(buf.data(), 375);
-    if (buf[0] != 'L' || buf[1] != 'A' || buf[2] != 'S' || buf[3] != 'F')
-        m_errors.push_back("Invalid LAS header.");
 }
 
 uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCount)
@@ -559,14 +556,14 @@ void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
     if (!closeEnough(m_ext.x.low, m_header.minx, .0000001))
     {
         oss << "Minimum X value of " << m_ext.x.low << " doesn't match header minimum of " <<
-            m_header.minx << ".\n";
+            m_header.minx << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
     if (!closeEnough(m_ext.x.high, m_header.maxx, .0000001))
     {
         oss << "Maximum X value of " << m_ext.x.high << " doesn't match header maximum of " <<
-            m_header.maxx << ".\n";
+            m_header.maxx << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
@@ -574,14 +571,14 @@ void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
     if (!closeEnough(m_ext.y.low, m_header.miny, .0000001))
     {
         oss << "Minimum Y value of " << m_ext.y.low << " doesn't match header minimum of " <<
-            m_header.miny << ".\n";
+            m_header.miny << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
     if (!closeEnough(m_ext.y.high, m_header.maxy, .0000001))
     {
         oss << "Maximum Y value of " << m_ext.y.high << " doesn't match header maximum of " <<
-            m_header.maxy << ".\n";
+            m_header.maxy << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
@@ -589,14 +586,14 @@ void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
     if (!closeEnough(m_ext.z.low, m_header.minz, .0000001))
     {
         oss << "Minimum Z value of " << m_ext.z.low << " doesn't match header minimum of " <<
-            m_header.minz << ".\n";
+            m_header.minz << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
     if (!closeEnough(m_ext.z.high, m_header.maxz, .0000001))
     {
         oss << "Maximum Z value of " << m_ext.z.high << " doesn't match header maximum of " <<
-            m_header.maxz << ".\n";
+            m_header.maxz << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
@@ -604,14 +601,14 @@ void Verifier::verifyRanges(const lazperf::copc_info_vlr& copcVlr)
     if (!closeEnough(m_ext.gpstime.low, copcVlr.gpstime_minimum, .0000001))
     {
         oss << "Minimum GPS time value of " << m_ext.gpstime.low <<
-            " doesn't match COPC VLR minimum of " << copcVlr.gpstime_minimum << ".\n";
+            " doesn't match COPC VLR minimum of " << copcVlr.gpstime_minimum << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
     if (!closeEnough(m_ext.gpstime.high, copcVlr.gpstime_maximum, .0000001))
     {
         oss << "Maximum GPS time value of " << m_ext.gpstime.high <<
-            " doesn't match COPC VLR maximum of " << copcVlr.gpstime_maximum << ".\n";
+            " doesn't match COPC VLR maximum of " << copcVlr.gpstime_maximum << ".";
         m_errors.push_back(oss.str());
         oss.str("");
     }
