@@ -87,6 +87,14 @@ struct RangeCalc
     Range<double> gpstime;
 };
 
+std::ostream& operator<<(std::ostream& out, const RangeCalc& rc)
+{
+    out << "X: [" << rc.x.low << ", " << rc.x.high << "]\n";
+    out << "Y: [" << rc.y.low << ", " << rc.y.high << "]\n";
+    out << "Z: [" << rc.z.low << ", " << rc.z.high << "]\n";
+    return out;
+}
+
 struct VoxelKey
 {
     int depth;
@@ -157,7 +165,7 @@ private:
     std::vector<char> findVlr(const std::string& user_id, int record_id);
     void verifyRanges(const lazperf::copc_info_vlr& vlr);
     void verifyPage(const Entries& page, const Entries& all);
-    void readData(Entry entry, const RangeCalc& extent);
+    void readData(Entry entry, RangeCalc extent);
     Entries processPage(Entries page, const lazperf::copc_info_vlr& vlr);
     Entries getHierarchyPage(uint64_t offset, uint64_t size);
     int getChunkCount();
@@ -504,8 +512,16 @@ Entries Verifier::processPage(Entries page, const lazperf::copc_info_vlr& vlr)
 }
 
 // Read the data to make sure it decompresses.
-void Verifier::readData(Entry entry, const RangeCalc& r)
+void Verifier::readData(Entry entry, RangeCalc r)
 {
+    // We add 1/2 the scale factor to allow for imprecision in floating-point calculations.
+    r.x.low -= (m_header.scale.x / 2);
+    r.x.high += (m_header.scale.x / 2);
+    r.y.low -= (m_header.scale.y / 2);
+    r.y.high += (m_header.scale.y / 2);
+    r.z.low -= (m_header.scale.z / 2);
+    r.z.high += (m_header.scale.z / 2);
+
     std::vector<char> buf(entry.byteSize);
     m_in.seekg(entry.offset);
     m_in.read(buf.data(), buf.size());
@@ -514,6 +530,7 @@ void Verifier::readData(Entry entry, const RangeCalc& r)
 
     bool outOfRange = false;
     char pointbuf[sizeof(Las)];
+
     while (entry.pointCount--)
     {
         d.decompress(pointbuf);
@@ -534,8 +551,9 @@ void Verifier::readData(Entry entry, const RangeCalc& r)
         m_ext.gpstime.high = (std::max)(l.gpstime, m_ext.gpstime.high);
         m_ext.gpstime.low = (std::min)(l.gpstime, m_ext.gpstime.low);
 
-        outOfRange |= (x < r.x.low) || (x > r.x.high) || (y < r.y.low) ||
-            (y > r.y.high) || (z < r.z.low) || (z > r.z.high);
+        outOfRange |= (x < r.x.low) || (x >= r.x.high) || (y < r.y.low) ||
+            (y >= r.y.high) || (z < r.z.low) || (z >= r.z.high);
+
     }
     if (outOfRange)
     {
