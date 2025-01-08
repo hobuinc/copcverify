@@ -403,12 +403,12 @@ uint64_t Verifier::traverseTree(const lazperf::copc_info_vlr& vlr, int chunkCoun
 
         uint64_t total = 0;
         std::cout << "Chunks:\n";
-        std::cout << "\tKey:     Offest / Count / Total Count\n";
+        std::cout << "\tKey:     Offest / Count / Byte Size / Total Count\n";
         for (const Entry& e : nonnegEntries)
         {
             total += e.pointCount;
             std::cout << "\t" << std::string(e.key) << ": " <<
-                e.offset << " / " << e.pointCount << " / " << total << "\n";
+                e.offset << " / " << e.pointCount << " / " << e.byteSize << " / " << total << "\n";
         }
         std::cout << "\n";
     }
