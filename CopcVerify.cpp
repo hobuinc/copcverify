@@ -526,12 +526,13 @@ void Verifier::readData(Entry entry, RangeCalc r)
     lazperf::reader::chunk_decompressor d(m_pdrf, m_ebCount, buf.data());
 
     bool outOfRange = false;
-    char pointbuf[sizeof(Las)];
+
+    std::vector<char> pointbuf(m_header.point_record_length);
 
     while (entry.pointCount--)
     {
-        d.decompress(pointbuf);
-        Las l(pointbuf, m_pdrf);
+        d.decompress(pointbuf.data());
+        Las l(pointbuf.data(), m_pdrf);
 
         double x = (l.x * m_header.scale.x) + m_header.offset.x;
         m_ext.x.high = (std::max)(x, m_ext.x.high);
