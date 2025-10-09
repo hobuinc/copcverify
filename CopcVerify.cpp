@@ -310,6 +310,21 @@ void Verifier::run()
     checkEbVlr(copcVlr);
     **/
 
+    std::vector<char> lazVlrData = findVlr("laszip encoded", 22204);
+    if (lazVlrData.empty())
+        m_errors.push_back("Could not find LAZ VLR in the file.");
+    lazperf::laz_vlr lazVlr;
+    lazVlr.fill(lazVlrData.data(), lazVlrData.size());
+
+    uint32_t chunkSize = lazVlr.chunk_size;
+    if (chunkSize != std::numeric_limits<uint32_t>::max())
+    {
+        std::ostringstream oss;
+        oss << "Invalid LAZ VLR. Chunk size is " << chunkSize << ", not " <<
+            std::numeric_limits<uint32_t>::max() << ".";
+        m_errors.push_back(oss.str());
+    }
+
     if (m_errors.empty())
         traverseTree(copcVlr, chunkCount);
     if (m_dump)
