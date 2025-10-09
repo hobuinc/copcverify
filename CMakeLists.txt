@@ -1,16 +1,75 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(CopcVerify)
+set(CMAKE_CXX_COMPILER "clang++")
+set(CMAKE_C_COMPILER "clang")
+
+
+project(COPCVerify VERSION 0.0.1 LANGUAGES CXX)
 
 set(LAZPERF_DIR ${PROJECT_SOURCE_DIR}/lazperf)
 file(GLOB_RECURSE LAZPERF_SRCS "${LAZPERF_DIR}/*.cpp")
 
 set(SRCS CopcVerify.cpp ${LAZPERF_SRCS})
 
-add_executable(copcverify ${SRCS})
-#target_compile_options(copcverify PRIVATE -fsanitize=undefined)
-#target_link_options(copcverify PRIVATE -fsanitize=undefined)
-
+add_executable(copcverify ${COPC_ICON} ${SRCS})
 target_include_directories(copcverify PRIVATE .)
+
 set_property(TARGET copcverify PROPERTY CXX_STANDARD 17)
 set_property(TARGET copcverify PROPERTY CXX_STANDARD_REQUIRED true)
+
+if (APPLE)
+    set(COPC_ICON ${CMAKE_CURRENT_SOURCE_DIR}/COPC.icns)
+    set_source_files_properties(${COPC_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+    set_property(TARGET copcverify PROPERTY MACOSX_BUNDLE_BUNDLE_NAME copcverify)
+    set_property(TARGET copcverify PROPERTY MACOSX_BUNDLE_ICON_FILE "COPC.icns")
+    set_property(TARGET copcverify PROPERTY MACOSX_BUNDLE_GUI_IDENTIFIER "co.hobu.copcverify")
+    set_property(TARGET copcverify PROPERTY MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
+    set_property(TARGET copcverify PROPERTY MACOSX_BUNDLE_COPYRIGHT "(c) 2025 Hobu, Inc.")
+    set_property(TARGET copcverify PROPERTY XCODE_ATTRIBUTE_ENABLE_HARDENED_RUNTIME YES)
+    set_property(TARGET copcverify PROPERTY XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "8C6FFDCBA490BF2738DBBF6EE6739FD644706DBF")
+
+
+    # set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.txt")
+    #	set(CMAKE_INSTALL_PREFIX "/Applications/Utilities")
+    set(CPACK_GENERATOR "DragNDrop")
+    set(CPACK_DMG_BACKGROUND_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/COPC_icon.png")
+    set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}")
+
+   #set(CPACK_GENERATOR "Bundle")
+
+   #set(CPACK_BUNDLE_ICON ${COPC_ICON})
+	set(CPACK_DMG_FORMAT "UDBZ")
+	set(CPACK_DMG_VOLUME_NAME "COPCVerify-${PROJECT_VERSION}")
+    #	set(CPACK_SYSTEM_NAME "OSX")
+    #set(CPACK_PACKAGE_ICON "${COPC_ICON}")
+    set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+    set(CPACK_RESOURCE_FILE_WELCOME "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+    set(CPACK_PACKAGE_EXECUTABLES copcverify)
+
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY ${PACKAGE_NAME})
+    set(CPACK_PACKAGE_NAME ${CPACK_PACKAGE_FILE_NAME})
+
+    set(CPACK_PACKAGE_VENDOR "Hobu, Inc.")
+
+    set(CPACK_PACKAGE_VERSION_MAJOR ${${PROJECT_NAME}_MAJOR_VERSION})
+    set(CPACK_PACKAGE_VERSION_MINOR ${${PROJECT_NAME}_MINOR_VERSION})
+    set(CPACK_PACKAGE_VERSION_PATCH ${${PROJECT_NAME}_PATCH_VERSION})
+    set(CPACK_PACKAGE_VERSION_TWEAK 0)
+
+    set(CPACK_PACKAGE_CONTACT "howard@hobu.co")
+
+endif(APPLE)
+
+
+
+add_custom_target(Docs SOURCES README.md LICENSE.txt)
+
+# Destination paths below are relative to ${CMAKE_INSTALL_PREFIX}
+install(TARGETS copcverify
+    RUNTIME DESTINATION bin
+    )
+
+
+include(CPack)
+

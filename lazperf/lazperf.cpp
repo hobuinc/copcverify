@@ -407,7 +407,7 @@ point_decompressor_6::point_decompressor_6(InputCb cb, size_t ebCount) :
 
 point_decompressor_6::~point_decompressor_6()
 {
-#ifndef NDEBUG
+#ifdef PRINT_DEBUG
     p_->point_.dumpSums();
     if (p_->byte_.count())
         p_->byte_.dumpSums();
@@ -447,7 +447,7 @@ point_decompressor_7::point_decompressor_7(InputCb cb, size_t ebCount) :
 
 point_decompressor_7::~point_decompressor_7()
 {
-#ifndef NDEBUG
+#ifdef PRINT_DEBUG
     p_->point_.dumpSums();
     p_->rgb_.dumpSums();
     if (p_->byte_.count())
@@ -491,7 +491,7 @@ point_decompressor_8::point_decompressor_8(InputCb cb, size_t ebCount) :
 
 point_decompressor_8::~point_decompressor_8()
 {
-#ifndef NDEBUG
+#ifdef PRINT_DEBUG
     p_->point_.dumpSums();
     p_->rgb_.dumpSums();
     p_->nir_.dumpSums();
@@ -674,11 +674,11 @@ std::vector<chunk> decompress_chunk_table(InputCb cb, size_t numChunks, bool var
 // Deprecated
 std::vector<uint32_t> decompress_chunk_table(InputCb cb, size_t numChunks)
 {
-    std::vector<chunk> chunks = decompress_chunk_table(cb, numChunks, false);;
+    std::vector<chunk> chunks = decompress_chunk_table(cb, numChunks, false);
 
     std::vector<uint32_t> sizes;
     for (chunk& c : chunks)
-        sizes.push_back(c.offset);
+        sizes.push_back((uint32_t)c.offset);
     return sizes;
 }
 

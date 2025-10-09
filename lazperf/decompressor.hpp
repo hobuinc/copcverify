@@ -59,18 +59,21 @@ namespace decompressors
 					}
 					// the corrector must fall into this interval
 					corr_min = -((int32_t)(corr_range/2));
+					corr_max = corr_min + corr_range - 1;
 				}
 				else if (bits && bits < 32) {
 					corr_bits = bits;
 					corr_range = 1u << bits;
 					// the corrector must fall into this interval
 					corr_min = -((int32_t)(corr_range/2));
+					corr_max = corr_min + corr_range - 1;
 				}
 				else {
 					corr_bits = 32;
 					corr_range = 0;
 					// the corrector must fall into this interval
 					corr_min = (std::numeric_limits<int32_t>::min)();
+					corr_max = (std::numeric_limits<int32_t>::max)();
 				}
 
 				k = 0;
@@ -180,8 +183,7 @@ namespace decompressors
 						else // otherwise c is in the interval [ 0 ...  + 2^(k-1) - 1 ]
 						{
 							// so we translate c back into the interval [ - (2^k - 1)  ...  - (2^(k-1)) ] by subtracting (2^k - 1)
-                            uint32_t adjustment = ((uint32_t)(1 << k) - 1);
-                            c -= adjustment;
+							c -= ((1<<k) - 1);
 						}
 					}
 					else
@@ -209,6 +211,8 @@ namespace decompressors
 			uint32_t corr_bits;
 			uint32_t corr_range;
 			int32_t corr_min;
+			int32_t corr_max;
+
 
 			std::vector<models::arithmetic> mBits;
 

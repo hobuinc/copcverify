@@ -38,6 +38,8 @@
 namespace lazperf
 {
 
+#pragma warning (push)
+#pragma warning (disable: 4251)
 struct LAZPERF_EXPORT vlr_header
 {
     uint16_t reserved;
@@ -108,8 +110,8 @@ public:
     uint16_t revision;
     uint32_t options;
     uint32_t chunk_size;
-    uint64_t num_points;
-    uint64_t num_bytes;
+    uint64_t num_points;    // This is *not* the number of points. It's garbage.
+    uint64_t num_bytes;     // This is *not* the number of bytes. It's garbage.
     std::vector<laz_item> items;
 
     laz_vlr();
@@ -152,7 +154,7 @@ public:
     std::vector<ebfield> items;
 
     eb_vlr();
-    eb_vlr(int ebCount);
+    [[deprecated]] eb_vlr(int ebCount);
     virtual ~eb_vlr();
 
     static eb_vlr create(std::istream& in, int byteSize);
@@ -163,7 +165,8 @@ public:
     virtual uint64_t size() const;
     virtual vlr_header header() const;
     virtual evlr_header eheader() const;
-    void addField();
+    [[deprecated]] void addField();
+    void addField(const ebfield& f);
 };
 
 struct LAZPERF_EXPORT wkt_vlr : public vlr
@@ -211,6 +214,7 @@ public:
     virtual vlr_header header() const;
     virtual evlr_header eheader() const;
 };
+#pragma warning (pop)
 
 } // namesapce lazperf
 

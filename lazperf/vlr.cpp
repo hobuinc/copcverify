@@ -325,8 +325,13 @@ eb_vlr::eb_vlr()
 
 eb_vlr::eb_vlr(int ebCount)
 {
-    while (ebCount--)
-        addField();
+    for (int i = 0; i < ebCount; ++i)
+    {
+        eb_vlr::ebfield field;
+
+        field.name = "FIELD_" + std::to_string(i);
+        addField(field);
+    }
 }
 
 eb_vlr::~eb_vlr()
@@ -412,6 +417,11 @@ void eb_vlr::addField()
     ebfield field;
 
     field.name = "FIELD_" + std::to_string(items.size());
+    items.push_back(field);
+}
+
+void eb_vlr::addField(const eb_vlr::ebfield& field)
+{
     items.push_back(field);
 }
 

@@ -156,7 +156,7 @@ bool basic_file::Private::loadHeader()
         f->seekg(0);
         head14.read(*f);
     }
-    if (head12.version.minor < 2 || head12.version.minor > 4)
+    else if (head12.version.minor > 4)
         return false;
 
     if (head12.compressed())
@@ -207,15 +207,11 @@ void basic_file::Private::parseVLRs()
             f->seekg(h.data_length, std::ios::cur); // jump forward
         count++;
     }
-    if (!f->good())
-        std::cerr << "Couldn't load VLRs!\n";
 
     // Search EVLRs
     if (head14.evlr_count && head14.evlr_offset != 0)
     {
         f->seekg(head14.evlr_offset);
-        if (!f->good())
-            std::cerr << "Invalid EVLR offset (" << head14.evlr_offset << ").\n";
 
         size_t count = 0;
         while (count < head14.evlr_count && f->good() && !f->eof())
@@ -229,8 +225,6 @@ void basic_file::Private::parseVLRs()
             count++;
         }
     }
-    if (!f->good())
-        std::cerr << "Couldn't load EXT VLRs!\n";
 
     if (compressed && !laz.valid())
         throw error("Couldn't find LASZIP VLR");
@@ -253,7 +247,7 @@ bool basic_file::Private::extractVlr(const std::string& user_id, uint16_t record
     // Extract EB VLR
     else if (user_id == "LASF_Spec" && record_id == 4)
     {
-        eb.read(*f, data_length);
+        eb.read(*f, (uint32_t) data_length);
         return true;
     }
     return false;
@@ -282,8 +276,6 @@ void basic_file::Private::parseChunkTable()
 {
     // Move to the begining of the data
     f->seekg(head12.point_offset);
-    if (!f->good())
-        throw error("Couldn't seek.");
 
     int64_t chunkoffset = 0;
     f->read((char*)&chunkoffset, sizeof(chunkoffset));
@@ -313,6 +305,14 @@ void basic_file::Private::parseChunkTable()
 
     if (chunk_table_header.version != 0)
         throw error("Bad chunk table. Invalid version.");
+
+    if (chunk_table_header.chunk_count == 0)
+    {
+        if (pointCount() != 0)
+            throw error("Missing chunk table.");
+
+        return;
+    }
 
     // Allocate enough room for the chunk table plus one because of the crazy way that
     // the chunk table is written. Once it is fixed up, we resize back to the correct size.
@@ -346,7 +346,7 @@ void basic_file::Private::parseChunkTable()
         {
             if (total_points < laz.chunk_size)
             {
-                count = total_points;
+                count = (uint32_t) total_points;
                 assert(i == chunk_table_header.chunk_count - 1);
             }
             else
