@@ -184,6 +184,9 @@ private:
     std::map<int, uint64_t> m_totals;
     std::map<int, uint64_t> m_counts;
     std::vector<std::string> m_errors;
+
+    // This value indicates variable chunk size in the LAZ VLR.
+    static const int CHUNK_SIZE = std::numeric_limits<uint32_t>::max();
 };
 
 int main(int argc, char *argv[])
@@ -310,17 +313,17 @@ void Verifier::run()
     checkEbVlr(copcVlr);
     **/
 
-    std::vector<char> lazVlrData = findVlr("laszip encoded", 22204);
+    lazperf::laz_vlr lazVlr;
+    lazperf::vlr_header vlrHeader = lazVlr.header();
+    std::vector<char> lazVlrData = findVlr(vlrHeader.user_id, vlrHeader.record_id);
     if (lazVlrData.empty())
         m_errors.push_back("Could not find LAZ VLR in the file.");
-    lazperf::laz_vlr lazVlr;
     lazVlr.fill(lazVlrData.data(), lazVlrData.size());
 
-    uint32_t chunkSize = lazVlr.chunk_size;
-    if (chunkSize != std::numeric_limits<uint32_t>::max())
+    if (lazVlr.chunk_size != CHUNK_SIZE)
     {
         std::ostringstream oss;
-        oss << "Invalid LAZ VLR. Chunk size is " << chunkSize << ", not " <<
+        oss << "Invalid LAZ VLR. Chunk size is " << CHUNK_SIZE << ", not " <<
             std::numeric_limits<uint32_t>::max() << ".";
         m_errors.push_back(oss.str());
     }
