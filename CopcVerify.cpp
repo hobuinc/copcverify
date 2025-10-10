@@ -323,8 +323,8 @@ void Verifier::run()
     if (lazVlr.chunk_size != CHUNK_SIZE)
     {
         std::ostringstream oss;
-        oss << "Invalid LAZ VLR. Chunk size is " << CHUNK_SIZE << ", not " <<
-            std::numeric_limits<uint32_t>::max() << ".";
+        oss << "Invalid LAZ VLR. Chunk size is " << lazVlr.chunk_size << ", not " <<
+            CHUNK_SIZE << ".";
         m_errors.push_back(oss.str());
     }
 
