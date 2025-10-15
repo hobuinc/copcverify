@@ -184,6 +184,9 @@ private:
     std::map<int, uint64_t> m_totals;
     std::map<int, uint64_t> m_counts;
     std::vector<std::string> m_errors;
+
+    // This value indicates variable chunk size in the LAZ VLR.
+    static const int CHUNK_SIZE = std::numeric_limits<uint32_t>::max();
 };
 
 int main(int argc, char *argv[])
@@ -309,6 +312,21 @@ void Verifier::run()
     /**
     checkEbVlr(copcVlr);
     **/
+
+    lazperf::laz_vlr lazVlr;
+    lazperf::vlr_header vlrHeader = lazVlr.header();
+    std::vector<char> lazVlrData = findVlr(vlrHeader.user_id, vlrHeader.record_id);
+    if (lazVlrData.empty())
+        m_errors.push_back("Could not find LAZ VLR in the file.");
+    lazVlr.fill(lazVlrData.data(), lazVlrData.size());
+
+    if (lazVlr.chunk_size != CHUNK_SIZE)
+    {
+        std::ostringstream oss;
+        oss << "Invalid LAZ VLR. Chunk size is " << lazVlr.chunk_size << ", not " <<
+            CHUNK_SIZE << ".";
+        m_errors.push_back(oss.str());
+    }
 
     if (m_errors.empty())
         traverseTree(copcVlr, chunkCount);
