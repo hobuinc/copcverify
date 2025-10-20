@@ -1,0 +1,117 @@
+name: Perform Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+
+jobs:
+  safety_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ensure repo owner
+        run: |
+          if [[ ${{ github.repository_owner }} != 'hobuinc' ]]; then
+            exit 1
+          fi
+  build:
+    needs: [safety_check]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+      - name: build-non-windows
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cmake -S . -B build
+          cd build
+          make
+      - name: build-windows
+        if: runner.os == 'windows'
+        shell: bash
+        run: |
+          mkdir build
+          cmake -G Ninja . -B build
+          cd build
+          ninja
+          dir
+
+      - name: 'Sign and Notarize macOS distribution'
+        if: runner.os == 'macOS'
+        shell: bash -l {0}
+        env:
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_BUILD_CERTIFICATE_BASE64: ${{ secrets.MACOS_BUILD_CERTIFICATE_BASE64}}
+          MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          MACOS_APPSTORECONNECT_KEYID: ${{ secrets.MACOS_APPSTORECONNECT_KEYID }}
+          MACOS_APPSTORECONNECT_ISSUER: ${{ secrets.MACOS_APPSTORECONNECT_ISSUER }}
+          MACOS_AUTHKEY: ${{ secrets.MACOS_AUTHKEY }}
+          MACOS_KEYCHAIN_PATH: ${{ runner.temp }}
+        run: |
+          # create temporary keychain
+          export KEYCHAIN="$MACOS_KEYCHAIN_PATH/app-signing.keychain-db"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # import certificate to keychain
+          export CERTIFICATE_PATH="$MACOS_KEYCHAIN_PATH/build_certificate.p12"
+          echo -n "$MACOS_BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          security import $CERTIFICATE_PATH -P "$MACOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          
+          cd build
+          # codesign
+          codesign --sign $MACOS_CODESIGN_IDENTITY --verbose --deep --force --timestamp --options runtime copcverify
+          codesign --verify --deep --verbose copcverify
+
+          # notarize
+          zip copcverify.zip copcverify
+          echo "$MACOS_AUTHKEY" >> "AuthKey.p8"
+          xcrun notarytool submit copcverify.zip --key ./AuthKey.p8 --key-id "$MACOS_APPSTORECONNECT_KEYID" --issuer $MACOS_APPSTORECONNECT_ISSUER --wait
+
+      - name: 'Codesign Prep for Windows'
+        if: runner.os == 'Windows'
+        id: set_codesign_vars
+        shell: bash
+        run: |
+          echo "${{ secrets.SM_CLIENT_CERT_FILE_B64 }}" | base64 --decode > /d/Certificate_pkcs12.p12
+          echo "C:\Program Files (x86)\Windows Kits\10\App Certification Kit" >> $GITHUB_PATH
+          echo "C:\Program Files\DigiCert\DigiCert Keylocker Tools" >> $GITHUB_PATH
+      - name: 'Setup SSM KSP on windows-latest'
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          curl -X GET https://one.digicert.com/signingmanager/api-ui/v1/releases/Keylockertools-windows-x64.msi/download -H "x-api-key:%SM_API_KEY%" -o Keylockertools-windows-x64.msi
+          msiexec /i Keylockertools-windows-x64.msi /quiet /qn
+          C:\Windows\System32\certutil.exe -csp "DigiCert Signing Manager KSP" -key -user
+          smctl windows certsync
+          smctl credentials save %SM_API_KEY% %SM_CLIENT_CERT_PASSWORD%
+          signtool.exe sign /sha1 ${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH }} /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 "build/copcverify.exe"
+          signtool.exe verify /v /pa "build/copcverify.exe"
+        env:
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_HOST: ${{ secrets.SM_HOST }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_CLIENT_CERT_FILE: "D:/Certificate_pkcs12.p12"
+
+      - name: upload binary
+        id: upload_binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: copcverify_${{ matrix.os }}
+          path: |
+            ./build/copcverify
+            ./build/copcverify.exe

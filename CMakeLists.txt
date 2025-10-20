@@ -63,7 +63,7 @@ endif(APPLE)
 
 
 
-add_custom_target(Docs SOURCES README.md LICENSE.txt)
+# add_custom_target(Docs SOURCES README.md LICENSE.txt)
 
 # Destination paths below are relative to ${CMAKE_INSTALL_PREFIX}
 install(TARGETS copcverify
